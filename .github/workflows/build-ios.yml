@@ -29,7 +29,7 @@ on:
 jobs:
   build-and-release:
     name: Build & Sign iOS Archive
-    runs-on: macos-14
+    runs-on: macos-latest
     steps:
       - name: Select Newest Xcode
         run: |
