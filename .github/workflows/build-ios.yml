@@ -1,0 +1,257 @@
+name: Vaporwave Runner 9000 - Universal iOS Builder
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_app:
+        description: 'Fleet App to Build'
+        required: true
+        type: choice
+        default: 'stem-studio'
+        options:
+          - 'stem-studio'
+          - 'midi-companion'
+          - 'mockingboard-revisited'
+          - 'logisim_revisited'
+          - 'hodoku_revisited'
+          - 'nonogram_revisited'
+          - 'kakuro_revisited'
+      branch:
+        description: 'Git branch'
+        required: true
+        default: 'main'
+      build_number:
+        description: 'Override iOS Build Number (optional)'
+        required: false
+        default: ''
+
+jobs:
+  build-and-release:
+    name: Build & Sign iOS Archive
+    runs-on: macos-14
+    steps:
+      - name: Select Xcode Version
+        run: |
+          sudo xcode-select -s /Applications/Xcode_16.2.app || sudo xcode-select -s /Applications/Xcode.app
+          xcodebuild -version
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 12
+
+      - name: Resolve Target App Configuration
+        id: config
+        run: |
+          APP="${{ inputs.target_app }}"
+          echo "Target App: $APP"
+
+          case "$APP" in
+            "stem-studio")
+              REPO="ntropey/stem-studio"
+              BUNDLE_ID="com.revisitedlabs.stemstudio"
+              WORKSPACE_PATH="ios/App/App.xcworkspace"
+              PROV_SECRET="${{ secrets.PROV_STEM_STUDIO }}"
+              BUILD_TYPE="npm"
+              ;;
+            "midi-companion")
+              REPO="ntropey/midi-companion"
+              BUNDLE_ID="com.revisitedlabs.midi"
+              WORKSPACE_PATH="ios/App/App.xcworkspace"
+              PROV_SECRET="${{ secrets.PROV_MIDI }}"
+              BUILD_TYPE="npm"
+              ;;
+            "mockingboard-revisited")
+              REPO="ntropey/mockingbird-revisited"
+              BUNDLE_ID="com.revisitedlabs.mockingboard"
+              WORKSPACE_PATH="ios/App/App.xcworkspace"
+              PROV_SECRET="${{ secrets.PROV_MOCKINGBOARD }}"
+              BUILD_TYPE="npm"
+              ;;
+            "logisim_revisited")
+              REPO="ntropey/logisim_revisited"
+              BUNDLE_ID="com.revisitedlabs.logisim"
+              WORKSPACE_PATH="packages/app/ios/App/App.xcworkspace"
+              PROV_SECRET="${{ secrets.PROV_LOGISIM }}"
+              BUILD_TYPE="pnpm-logisim"
+              ;;
+            "hodoku_revisited")
+              REPO="ntropey/hodoku_revisited"
+              BUNDLE_ID="com.revisitedlabs.hodoku"
+              WORKSPACE_PATH="packages/app/ios/App/App.xcworkspace"
+              PROV_SECRET="${{ secrets.PROV_HODOKU }}"
+              BUILD_TYPE="pnpm-hodoku"
+              ;;
+            "nonogram_revisited")
+              REPO="ntropey/nonogram_revisited"
+              BUNDLE_ID="com.revisitedlabs.nongram"
+              WORKSPACE_PATH="packages/app/ios/App/App.xcworkspace"
+              PROV_SECRET="${{ secrets.PROV_NONOGRAM }}"
+              BUILD_TYPE="pnpm-nonogram"
+              ;;
+            "kakuro_revisited")
+              REPO="ntropey/kakuro_revisited"
+              BUNDLE_ID="com.revisitedlabs.kakuro"
+              WORKSPACE_PATH="packages/app/ios/App/App.xcworkspace"
+              PROV_SECRET="${{ secrets.PROV_KAKURO }}"
+              BUILD_TYPE="pnpm-kakuro"
+              ;;
+            *)
+              echo "Unknown app: $APP"
+              exit 1
+              ;;
+          esac
+
+          echo "repo=$REPO" >> $GITHUB_OUTPUT
+          echo "bundle_id=$BUNDLE_ID" >> $GITHUB_OUTPUT
+          echo "workspace_path=$WORKSPACE_PATH" >> $GITHUB_OUTPUT
+          echo "build_type=$BUILD_TYPE" >> $GITHUB_OUTPUT
+          echo "$PROV_SECRET" > $RUNNER_TEMP/target_profile.b64
+
+      - name: Clone Target Repository
+        run: |
+          REPO="${{ steps.config.outputs.repo }}"
+          BRANCH="${{ inputs.branch }}"
+          echo "Cloning $REPO (branch: $BRANCH)..."
+          git clone --depth 1 --branch "$BRANCH" "https://${{ secrets.GH_PAT }}@github.com/$REPO.git" app_src
+
+      - name: Build Web Assets and Sync Capacitor
+        run: |
+          cd app_src
+          BUILD_TYPE="${{ steps.config.outputs.build_type }}"
+
+          case "$BUILD_TYPE" in
+            "npm")
+              npm ci || npm install
+              npm run build
+              npx cap sync ios
+              ;;
+            "pnpm-logisim")
+              pnpm install
+              pnpm --filter @logisim/app build || pnpm build
+              cd packages/app && npx cap sync ios
+              ;;
+            "pnpm-hodoku")
+              pnpm install
+              pnpm --filter @hodoku/app build
+              cd packages/app && npx cap sync ios
+              ;;
+            "pnpm-nonogram")
+              pnpm install
+              pnpm --filter @nonogram/app build
+              cd packages/app && npx cap sync ios
+              ;;
+            "pnpm-kakuro")
+              pnpm install
+              pnpm --filter @kakuro/app build
+              cd packages/app && npx cap sync ios
+              ;;
+          esac
+
+      - name: Install Apple Certificate and Provisioning Profile
+        env:
+          BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+          P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          CERTIFICATE_PATH=$RUNNER_TEMP/build_certificate.p12
+          PP_PATH=$RUNNER_TEMP/build_pp.mobileprovision
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+
+          echo -n "$BUILD_CERTIFICATE_BASE64" | base64 --decode -o $CERTIFICATE_PATH
+          base64 --decode -i $RUNNER_TEMP/target_profile.b64 -o $PP_PATH
+
+          KEYCHAIN_PASS="${KEYCHAIN_PASSWORD:-$(uuidgen)}"
+          security create-keychain -p "$KEYCHAIN_PASS" $KEYCHAIN_PATH
+          security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
+          security unlock-keychain -p "$KEYCHAIN_PASS" $KEYCHAIN_PATH
+
+          security import $CERTIFICATE_PATH -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASS" $KEYCHAIN_PATH
+          security list-keychain -d user -s $KEYCHAIN_PATH
+
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          UUID=$(/usr/libexec/PlistBuddy -c "Print UUID" /dev/stdin <<< $(security cms -D -i $PP_PATH))
+          cp $PP_PATH ~/Library/MobileDevice/Provisioning\ Profiles/$UUID.mobileprovision
+          echo "Installed provisioning profile with UUID: $UUID"
+
+          PROFILE_NAME=$(/usr/libexec/PlistBuddy -c "Print Name" /dev/stdin <<< $(security cms -D -i $PP_PATH))
+          echo "profile_name=$PROFILE_NAME" >> $GITHUB_ENV
+          echo "profile_uuid=$UUID" >> $GITHUB_ENV
+
+      - name: Build Archive & IPA
+        env:
+          DEVELOPMENT_TEAM: "5BJAQ969Y4"
+          CODE_SIGN_IDENTITY: "Apple Distribution"
+        run: |
+          BUNDLE_ID="${{ steps.config.outputs.bundle_id }}"
+          WORKSPACE_REL="${{ steps.config.outputs.workspace_path }}"
+
+          cat <<EOF > $RUNNER_TEMP/exportOptions.plist
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>app-store</string>
+            <key>teamID</key>
+            <string>$DEVELOPMENT_TEAM</string>
+            <key>signingStyle</key>
+            <string>manual</string>
+            <key>signingCertificate</key>
+            <string>$CODE_SIGN_IDENTITY</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>$BUNDLE_ID</key>
+              <string>$profile_name</string>
+            </dict>
+          </dict>
+          </plist>
+          EOF
+
+          cd app_src
+          WORKSPACE_DIR=$(dirname "$WORKSPACE_REL")
+          PROJECT_NAME=$(basename "$WORKSPACE_REL" .xcworkspace)
+          cd "$WORKSPACE_DIR"
+
+          # Optional version bump
+          if [ -n "${{ inputs.build_number }}" ]; then
+            xcrun agvtool new-version -all "${{ inputs.build_number }}" || true
+          fi
+
+          if [ -f "$PROJECT_NAME.xcworkspace/contents.xcworkspacedata" ]; then
+            BUILD_FLAG="-workspace $PROJECT_NAME.xcworkspace"
+          else
+            BUILD_FLAG="-project $PROJECT_NAME.xcodeproj"
+          fi
+
+          xcodebuild $BUILD_FLAG \
+            -scheme App \
+            -configuration Release \
+            -archivePath $RUNNER_TEMP/App.xcarchive \
+            archive \
+            DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="$CODE_SIGN_IDENTITY" \
+            PROVISIONING_PROFILE_SPECIFIER="$profile_name"
+
+          xcodebuild -exportArchive \
+            -archivePath $RUNNER_TEMP/App.xcarchive \
+            -exportOptionsPlist $RUNNER_TEMP/exportOptions.plist \
+            -exportPath $RUNNER_TEMP/build
+
+      - name: Upload IPA to App Store Connect / TestFlight
+        env:
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.ISSUER_ID }}
+          APP_STORE_CONNECT_PRIVATE_KEY: ${{ secrets.KEY_BASE64 }}
+        run: |
+          mkdir -p ~/.appstoreconnect/private_keys
+          echo -n "$APP_STORE_CONNECT_PRIVATE_KEY" | base64 --decode > ~/.appstoreconnect/private_keys/AuthKey_${APP_STORE_CONNECT_KEY_ID}.p8
+          xcrun altool --upload-app -f "$RUNNER_TEMP/build/App.ipa" -t ios --apiKey "$APP_STORE_CONNECT_KEY_ID" --apiIssuer "$APP_STORE_CONNECT_ISSUER_ID"
+          echo "Successfully uploaded IPA directly to App Store Connect!"
