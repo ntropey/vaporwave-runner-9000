@@ -117,23 +117,23 @@ jobs:
             "stem-studio")
               REPO="ntropey/stem-studio"
               BUNDLE_ID="com.revisitedlabs.stemstudio"
-              WORKSPACE_PATH="ios/App/App.xcworkspace"
+              WORKSPACE_PATH="ios/App/App.xcodeproj"
               PROV_SECRET="${{ secrets.PROV_STEM_STUDIO }}"
               BUILD_TYPE="npm"
               ;;
             "midi-companion")
               REPO="ntropey/midi-companion"
-              BUNDLE_ID="com.revisitedlabs.midi"
-              WORKSPACE_PATH="ios/App/App.xcworkspace"
+              BUNDLE_ID="com.revisitedlabs.midicompanion"
+              WORKSPACE_PATH="ios/App/App.xcodeproj"
               PROV_SECRET="${{ secrets.PROV_MIDI }}"
               BUILD_TYPE="npm"
               ;;
             "mockingboard-revisited")
               REPO="ntropey/mockingbird-revisited"
               BUNDLE_ID="com.revisitedlabs.mockingboard"
-              WORKSPACE_PATH="ios/App/App.xcworkspace"
+              WORKSPACE_PATH="ios/App/App.xcodeproj"
               PROV_SECRET="${{ secrets.PROV_MOCKINGBOARD }}"
-              BUILD_TYPE="npm"
+              BUILD_TYPE="pnpm-mockingboard"
               ;;
             *)
               echo "Unknown app: $APP"
@@ -203,21 +203,41 @@ jobs:
               cd packages/app && npx cap sync ios
               ;;
             "pnpm-hodoku")
+              if [ -n "$BUILD_NUMBER" ]; then
+                sed -i '' "s/CURRENT_PROJECT_VERSION = [0-9]*;/CURRENT_PROJECT_VERSION = ${BUILD_NUMBER};/g" packages/app/ios/App/App.xcodeproj/project.pbxproj
+              fi
               pnpm install
               pnpm --filter @hodoku/app build
               cd packages/app && npx cap sync ios
               ;;
             "pnpm-nonogram")
+              if [ -n "$BUILD_NUMBER" ]; then
+                sed -i '' "s/CURRENT_PROJECT_VERSION = [0-9]*;/CURRENT_PROJECT_VERSION = ${BUILD_NUMBER};/g" packages/app/ios/App/App.xcodeproj/project.pbxproj
+              fi
               pnpm install
               pnpm --filter @nonogram/app build
               cd packages/app && npx cap sync ios
               ;;
             "pnpm-kakuro")
+              if [ -n "$BUILD_NUMBER" ]; then
+                sed -i '' "s/CURRENT_PROJECT_VERSION = [0-9]*;/CURRENT_PROJECT_VERSION = ${BUILD_NUMBER};/g" packages/app/ios/App/App.xcodeproj/project.pbxproj
+              fi
               pnpm install
               pnpm --filter @kakuro/app build
               cd packages/app && npx cap sync ios
               ;;
+            "pnpm-mockingboard")
+              if [ -n "$BUILD_NUMBER" ]; then
+                sed -i '' "s/CURRENT_PROJECT_VERSION = [0-9]*;/CURRENT_PROJECT_VERSION = ${BUILD_NUMBER};/g" ios/App/App.xcodeproj/project.pbxproj
+              fi
+              pnpm install
+              pnpm run build
+              npx cap sync ios
+              ;;
             "npm")
+              if [ -n "$BUILD_NUMBER" ]; then
+                sed -i '' "s/CURRENT_PROJECT_VERSION = [0-9]*;/CURRENT_PROJECT_VERSION = ${BUILD_NUMBER};/g" ios/App/App.xcodeproj/project.pbxproj
+              fi
               npm ci || npm install
               npm run build
               npx cap sync ios
@@ -287,14 +307,21 @@ jobs:
 
           cd app_src
           WORKSPACE_DIR=$(dirname "$WORKSPACE_REL")
-          PROJECT_FILE=$(basename "$WORKSPACE_REL")
           cd "$WORKSPACE_DIR"
 
-          if [[ "$PROJECT_FILE" == *.xcworkspace ]]; then
-            BUILD_FLAG="-workspace $PROJECT_FILE"
+          if [ -d "App.xcworkspace" ]; then
+            BUILD_FLAG="-workspace App.xcworkspace"
+          elif [ -d "App.xcodeproj" ]; then
+            BUILD_FLAG="-project App.xcodeproj"
           else
-            BUILD_FLAG="-project $PROJECT_FILE"
+            PROJECT_FILE=$(basename "$WORKSPACE_REL")
+            if [[ "$PROJECT_FILE" == *.xcworkspace ]]; then
+              BUILD_FLAG="-workspace $PROJECT_FILE"
+            else
+              BUILD_FLAG="-project $PROJECT_FILE"
+            fi
           fi
+          echo "Building with: $BUILD_FLAG in $(pwd)"
 
           xcodebuild $BUILD_FLAG \
             -scheme App \
