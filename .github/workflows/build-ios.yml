@@ -17,6 +17,7 @@ on:
           - 'stem-studio'
           - 'midi-companion'
           - 'mockingboard-revisited'
+          - 'dolce-colore'
       branch:
         description: 'Git branch'
         required: true
@@ -135,6 +136,13 @@ jobs:
               PROV_SECRET="${{ secrets.PROV_MOCKINGBOARD }}"
               BUILD_TYPE="pnpm-mockingboard"
               ;;
+            "dolce-colore")
+              REPO="ntropey/dolce-colore"
+              BUNDLE_ID="com.revisitedlabs.dolcecolore"
+              WORKSPACE_PATH="ios/App/App.xcodeproj"
+              PROV_SECRET="${{ secrets.PROV_DOLCE_COLORE }}"
+              BUILD_TYPE="dolce-colore"
+              ;;
             *)
               echo "Unknown app: $APP"
               exit 1
@@ -232,6 +240,19 @@ jobs:
               fi
               pnpm install
               pnpm run build
+              npx cap sync ios
+              ;;
+            "dolce-colore")
+              if [ -n "$BUILD_NUMBER" ]; then
+                sed -i '' "s/CURRENT_PROJECT_VERSION = [0-9]*;/CURRENT_PROJECT_VERSION = ${BUILD_NUMBER};/g" ios/App/App.xcodeproj/project.pbxproj
+              fi
+              mkdir -p weights
+              echo "Downloading DDColor tiny FP16 ONNX model..."
+              curl -fSL "https://huggingface.co/edgetools/ddcolor/resolve/main/ddcolor-tiny-fp16.onnx" -o weights/ddcolor-tiny-mobile.onnx
+              ls -lh weights/ddcolor-tiny-mobile.onnx
+              cd frontend
+              npm ci || npm install
+              npm run build
               npx cap sync ios
               ;;
             "npm")
