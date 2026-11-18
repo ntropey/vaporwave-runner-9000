@@ -136,7 +136,7 @@ jobs:
           REPO="${{ steps.config.outputs.repo }}"
           BRANCH="${{ inputs.branch }}"
           echo "Cloning $REPO (branch: $BRANCH)..."
-          git clone --depth 1 --branch "$BRANCH" "https://${{ secrets.GH_PAT }}@github.com/$REPO.git" app_src
+          git clone --depth 1 --branch "$BRANCH" "https://x-access-token:${{ secrets.GH_PAT }}@github.com/$REPO.git" app_src
 
       - name: Build Web Assets and Sync Capacitor
         run: |
