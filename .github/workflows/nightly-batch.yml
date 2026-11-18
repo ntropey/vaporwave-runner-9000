@@ -1,9 +1,10 @@
 name: Vaporwave Runner 9000 - Nightly Batch iOS Builder
 
 on:
-  schedule:
-    # 03:00 UTC = 10:00 PM EST (off-peak, queue-free window)
-    - cron: '0 3 * * *'
+  # Uncomment schedule when queueing a new release batch:
+  # schedule:
+  #   # 03:00 UTC = 10:00 PM EST (off-peak, queue-free window)
+  #   - cron: '0 3 * * *'
   workflow_dispatch:
     inputs:
       build_all:
