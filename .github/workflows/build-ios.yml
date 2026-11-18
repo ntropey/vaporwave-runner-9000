@@ -7,15 +7,16 @@ on:
         description: 'Fleet App to Build'
         required: true
         type: choice
-        default: 'stem-studio'
+        default: 'logisim-pro'
         options:
-          - 'stem-studio'
-          - 'midi-companion'
-          - 'mockingboard-revisited'
-          - 'logisim_revisited'
+          - 'logisim-pro'
+          - 'logisim-lite'
           - 'hodoku_revisited'
           - 'nonogram_revisited'
           - 'kakuro_revisited'
+          - 'stem-studio'
+          - 'midi-companion'
+          - 'mockingboard-revisited'
       branch:
         description: 'Git branch'
         required: true
@@ -30,9 +31,19 @@ jobs:
     name: Build & Sign iOS Archive
     runs-on: macos-14
     steps:
-      - name: Select Xcode Version
+      - name: Select Newest Xcode
         run: |
-          sudo xcode-select -s /Applications/Xcode_16.2.app || sudo xcode-select -s /Applications/Xcode.app
+          XCODE_APP=$(python3 - <<'PY'
+          import glob, re
+          apps = [p for p in glob.glob('/Applications/Xcode*.app') if p != '/Applications/Xcode.app']
+          def key(path):
+              m = re.search(r'Xcode[_-](\d+(?:\.\d+)*)', path)
+              return tuple(int(part) for part in m.group(1).split('.')) if m else (0,)
+          print(max(apps, key=key) if apps else '/Applications/Xcode.app')
+          PY
+          )
+          echo "Using $XCODE_APP"
+          sudo xcode-select -s "$XCODE_APP"
           xcodebuild -version
 
       - name: Set up Node.js
@@ -52,6 +63,41 @@ jobs:
           echo "Target App: $APP"
 
           case "$APP" in
+            "logisim-pro")
+              REPO="ntropey/logisim_revisited"
+              BUNDLE_ID="com.revisitedlabs.logisim"
+              WORKSPACE_PATH="packages/app/ios/App/App.xcodeproj"
+              PROV_SECRET="${{ secrets.PROV_LOGISIM }}"
+              BUILD_TYPE="pnpm-logisim-pro"
+              ;;
+            "logisim-lite")
+              REPO="ntropey/logisim_revisited"
+              BUNDLE_ID="com.revisitedlabs.logisimlite"
+              WORKSPACE_PATH="packages/app/ios/App/App.xcodeproj"
+              PROV_SECRET="${{ secrets.PROV_LOGISIM_LITE }}"
+              BUILD_TYPE="pnpm-logisim-lite"
+              ;;
+            "hodoku_revisited")
+              REPO="ntropey/hodoku_revisited"
+              BUNDLE_ID="com.revisitedlabs.hodoku"
+              WORKSPACE_PATH="packages/app/ios/App/App.xcodeproj"
+              PROV_SECRET="${{ secrets.PROV_HODOKU }}"
+              BUILD_TYPE="pnpm-hodoku"
+              ;;
+            "nonogram_revisited")
+              REPO="ntropey/nonogram_revisited"
+              BUNDLE_ID="com.revisitedlabs.nongram"
+              WORKSPACE_PATH="packages/app/ios/App/App.xcodeproj"
+              PROV_SECRET="${{ secrets.PROV_NONOGRAM }}"
+              BUILD_TYPE="pnpm-nonogram"
+              ;;
+            "kakuro_revisited")
+              REPO="ntropey/kakuro_revisited"
+              BUNDLE_ID="com.revisitedlabs.kakuro"
+              WORKSPACE_PATH="packages/app/ios/App/App.xcodeproj"
+              PROV_SECRET="${{ secrets.PROV_KAKURO }}"
+              BUILD_TYPE="pnpm-kakuro"
+              ;;
             "stem-studio")
               REPO="ntropey/stem-studio"
               BUNDLE_ID="com.revisitedlabs.stemstudio"
@@ -72,34 +118,6 @@ jobs:
               WORKSPACE_PATH="ios/App/App.xcworkspace"
               PROV_SECRET="${{ secrets.PROV_MOCKINGBOARD }}"
               BUILD_TYPE="npm"
-              ;;
-            "logisim_revisited")
-              REPO="ntropey/logisim_revisited"
-              BUNDLE_ID="com.revisitedlabs.logisim"
-              WORKSPACE_PATH="packages/app/ios/App/App.xcworkspace"
-              PROV_SECRET="${{ secrets.PROV_LOGISIM }}"
-              BUILD_TYPE="pnpm-logisim"
-              ;;
-            "hodoku_revisited")
-              REPO="ntropey/hodoku_revisited"
-              BUNDLE_ID="com.revisitedlabs.hodoku"
-              WORKSPACE_PATH="packages/app/ios/App/App.xcworkspace"
-              PROV_SECRET="${{ secrets.PROV_HODOKU }}"
-              BUILD_TYPE="pnpm-hodoku"
-              ;;
-            "nonogram_revisited")
-              REPO="ntropey/nonogram_revisited"
-              BUNDLE_ID="com.revisitedlabs.nongram"
-              WORKSPACE_PATH="packages/app/ios/App/App.xcworkspace"
-              PROV_SECRET="${{ secrets.PROV_NONOGRAM }}"
-              BUILD_TYPE="pnpm-nonogram"
-              ;;
-            "kakuro_revisited")
-              REPO="ntropey/kakuro_revisited"
-              BUNDLE_ID="com.revisitedlabs.kakuro"
-              WORKSPACE_PATH="packages/app/ios/App/App.xcworkspace"
-              PROV_SECRET="${{ secrets.PROV_KAKURO }}"
-              BUILD_TYPE="pnpm-kakuro"
               ;;
             *)
               echo "Unknown app: $APP"
@@ -124,16 +142,48 @@ jobs:
         run: |
           cd app_src
           BUILD_TYPE="${{ steps.config.outputs.build_type }}"
+          BUILD_NUMBER="${{ inputs.build_number }}"
 
           case "$BUILD_TYPE" in
-            "npm")
-              npm ci || npm install
-              npm run build
-              npx cap sync ios
-              ;;
-            "pnpm-logisim")
+            "pnpm-logisim-pro")
+              if [ -n "$BUILD_NUMBER" ]; then
+                sed -i '' "s/CURRENT_PROJECT_VERSION = [0-9]*;/CURRENT_PROJECT_VERSION = ${BUILD_NUMBER};/g" packages/app/ios/App/App.xcodeproj/project.pbxproj
+              fi
               pnpm install
-              pnpm --filter @logisim/app build || pnpm build
+              VITE_EDITION=pro pnpm --filter @logisim/app build
+              cd packages/app && npx cap sync ios
+              ;;
+            "pnpm-logisim-lite")
+              BUILD_NUM="${BUILD_NUMBER:-3}"
+              sed -i '' 's/com\.revisitedlabs\.logisim/com.revisitedlabs.logisimlite/g' packages/app/capacitor.config.ts
+              sed -i '' 's/Logisim Revisited/Logisim Lab Lite/g' packages/app/capacitor.config.ts
+              sed -i '' 's/com\.revisitedlabs\.logisim/com.revisitedlabs.logisimlite/g' packages/app/ios/App/App.xcodeproj/project.pbxproj
+              sed -i '' "s/CURRENT_PROJECT_VERSION = [0-9]*;/CURRENT_PROJECT_VERSION = ${BUILD_NUM};/g" packages/app/ios/App/App.xcodeproj/project.pbxproj
+              /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName Logisim Lab Lite" packages/app/ios/App/App/Info.plist || true
+
+              ICON_SRC="packages/app/store-assets/icons/lite/ios/AppIcon-1024x1024.png"
+              ICON_DIR="packages/app/ios/App/App/Assets.xcassets/AppIcon.appiconset"
+              if [ -f "$ICON_SRC" ]; then
+                sips -z 20 20 "$ICON_SRC" --out "$ICON_DIR/AppIcon-20x20@1x.png" >/dev/null || true
+                sips -z 40 40 "$ICON_SRC" --out "$ICON_DIR/AppIcon-20x20@2x.png" >/dev/null || true
+                sips -z 60 60 "$ICON_SRC" --out "$ICON_DIR/AppIcon-20x20@3x.png" >/dev/null || true
+                sips -z 29 29 "$ICON_SRC" --out "$ICON_DIR/AppIcon-29x29@1x.png" >/dev/null || true
+                sips -z 58 58 "$ICON_SRC" --out "$ICON_DIR/AppIcon-29x29@2x.png" >/dev/null || true
+                sips -z 87 87 "$ICON_SRC" --out "$ICON_DIR/AppIcon-29x29@3x.png" >/dev/null || true
+                sips -z 40 40 "$ICON_SRC" --out "$ICON_DIR/AppIcon-40x40@1x.png" >/dev/null || true
+                sips -z 80 80 "$ICON_SRC" --out "$ICON_DIR/AppIcon-40x40@2x.png" >/dev/null || true
+                sips -z 120 120 "$ICON_SRC" --out "$ICON_DIR/AppIcon-40x40@3x.png" >/dev/null || true
+                sips -z 120 120 "$ICON_SRC" --out "$ICON_DIR/AppIcon-60x60@2x.png" >/dev/null || true
+                sips -z 180 180 "$ICON_SRC" --out "$ICON_DIR/AppIcon-60x60@3x.png" >/dev/null || true
+                sips -z 76 76 "$ICON_SRC" --out "$ICON_DIR/AppIcon-76x76@1x.png" >/dev/null || true
+                sips -z 152 152 "$ICON_SRC" --out "$ICON_DIR/AppIcon-76x76@2x.png" >/dev/null || true
+                sips -z 167 167 "$ICON_SRC" --out "$ICON_DIR/AppIcon-83.5x83.5@2x.png" >/dev/null || true
+                cp "$ICON_SRC" "$ICON_DIR/AppIcon-512@2x.png" || true
+                cp "$ICON_SRC" "$ICON_DIR/AppIcon-1024x1024.png" || true
+              fi
+
+              pnpm install
+              VITE_EDITION=lite pnpm --filter @logisim/app build
               cd packages/app && npx cap sync ios
               ;;
             "pnpm-hodoku")
@@ -150,6 +200,11 @@ jobs:
               pnpm install
               pnpm --filter @kakuro/app build
               cd packages/app && npx cap sync ios
+              ;;
+            "npm")
+              npm ci || npm install
+              npm run build
+              npx cap sync ios
               ;;
           esac
 
@@ -184,7 +239,7 @@ jobs:
           echo "profile_name=$PROFILE_NAME" >> $GITHUB_ENV
           echo "profile_uuid=$UUID" >> $GITHUB_ENV
 
-      - name: Build Archive & IPA
+      - name: Build Archive & Export IPA
         env:
           DEVELOPMENT_TEAM: "5BJAQ969Y4"
           CODE_SIGN_IDENTITY: "Apple Distribution"
@@ -216,18 +271,13 @@ jobs:
 
           cd app_src
           WORKSPACE_DIR=$(dirname "$WORKSPACE_REL")
-          PROJECT_NAME=$(basename "$WORKSPACE_REL" .xcworkspace)
+          PROJECT_FILE=$(basename "$WORKSPACE_REL")
           cd "$WORKSPACE_DIR"
 
-          # Optional version bump
-          if [ -n "${{ inputs.build_number }}" ]; then
-            xcrun agvtool new-version -all "${{ inputs.build_number }}" || true
-          fi
-
-          if [ -f "$PROJECT_NAME.xcworkspace/contents.xcworkspacedata" ]; then
-            BUILD_FLAG="-workspace $PROJECT_NAME.xcworkspace"
+          if [[ "$PROJECT_FILE" == *.xcworkspace ]]; then
+            BUILD_FLAG="-workspace $PROJECT_FILE"
           else
-            BUILD_FLAG="-project $PROJECT_NAME.xcodeproj"
+            BUILD_FLAG="-project $PROJECT_FILE"
           fi
 
           xcodebuild $BUILD_FLAG \
