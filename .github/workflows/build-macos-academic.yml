@@ -1,0 +1,97 @@
+name: Build macOS Academic DMG
+
+on:
+  workflow_dispatch:
+    inputs:
+      edition:
+        description: 'Edition to build'
+        required: true
+        type: choice
+        default: 'academic'
+        options:
+          - 'academic'
+          - 'pro'
+      version:
+        description: 'Release version'
+        required: true
+        type: string
+        default: '1.1.1'
+      branch:
+        description: 'Git branch of ntropey/logisim_revisited'
+        required: true
+        type: string
+        default: 'main'
+
+jobs:
+  build-macos-dmg:
+    name: Build macOS DMG (${{ inputs.edition }} v${{ inputs.version }})
+    runs-on: macos-latest
+    steps:
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 12
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Clone ntropey/logisim_revisited
+        run: |
+          BRANCH="${{ inputs.branch }}"
+          echo "Cloning ntropey/logisim_revisited (branch: $BRANCH)..."
+          git clone --depth 1 --branch "$BRANCH" "https://x-access-token:${{ secrets.GH_PAT }}@github.com/ntropey/logisim_revisited.git" app_src
+
+      - name: Install Python dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install pyinstaller pywebview pillow
+
+      - name: Install workspace dependencies
+        working-directory: app_src
+        run: pnpm install
+
+      - name: Build macOS .app and .dmg
+        working-directory: app_src
+        run: |
+          python3 packages/app/macos/build_dmg.py \
+            --edition "${{ inputs.edition }}" \
+            --version "${{ inputs.version }}"
+
+      - name: Verify DMG artifact
+        working-directory: app_src
+        run: |
+          set -euo pipefail
+          ls -lh packages/app/dist-installer/*.dmg
+          DMG_COUNT=0
+          for f in packages/app/dist-installer/*.dmg; do
+            if [ ! -f "$f" ]; then
+              echo "No .dmg file found in packages/app/dist-installer/"
+              exit 1
+            fi
+            SIZE=$(stat -f%z "$f")
+            echo "Found DMG: $f ($SIZE bytes)"
+            if [ "$SIZE" -le 5242880 ]; then
+              echo "ERROR: DMG $f is too small ($SIZE bytes <= 5 MB)"
+              exit 1
+            fi
+            DMG_COUNT=$((DMG_COUNT + 1))
+          done
+          if [ "$DMG_COUNT" -eq 0 ]; then
+            echo "ERROR: No .dmg files found"
+            exit 1
+          fi
+
+      - name: Upload macOS DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LogicSimAcademic-v${{ inputs.version }}-macos-dmg
+          path: app_src/packages/app/dist-installer/*.dmg
+          retention-days: 30
+          if-no-files-found: error
