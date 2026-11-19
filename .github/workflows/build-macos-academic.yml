@@ -64,6 +64,89 @@ jobs:
             --edition "${{ inputs.edition }}" \
             --version "${{ inputs.version }}"
 
+      - name: Code Sign, Notarize & Staple DMG (Developer ID)
+        if: ${{ secrets.MACOS_DEV_ID_P12_BASE64 != '' }}
+        working-directory: app_src
+        env:
+          P12_B64: ${{ secrets.MACOS_DEV_ID_P12_BASE64 }}
+          P12_PASS: ${{ secrets.MACOS_DEV_ID_P12_PASSWORD }}
+          SIGN_IDENTITY: ${{ secrets.MACOS_DEV_ID_IDENTITY }}
+          ASC_KEY_ID: ${{ secrets.KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ISSUER_ID }}
+          ASC_KEY_B64: ${{ secrets.KEY_BASE64 }}
+        run: |
+          set -euo pipefail
+          EDITION="${{ inputs.edition }}"
+          VERSION="${{ inputs.version }}"
+
+          KEYCHAIN_PATH="$RUNNER_TEMP/macos-devid.keychain-db"
+          KEYCHAIN_PASS="$(openssl rand -hex 16)"
+          P12_PATH="$RUNNER_TEMP/devid.p12"
+          ENTITLEMENTS="$RUNNER_TEMP/entitlements.plist"
+          ASC_KEY_PATH="$RUNNER_TEMP/AuthKey_${ASC_KEY_ID}.p8"
+
+          echo "$P12_B64" | base64 --decode > "$P12_PATH"
+          echo "$ASC_KEY_B64" | base64 --decode > "$ASC_KEY_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN_PATH"
+          security import "$P12_PATH" -P "$P12_PASS" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASS" "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | sed -e 's/^[[:space:]]*//' -e 's/"//g')
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+
+          cat <<'EOF' > "$ENTITLEMENTS"
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>com.apple.security.cs.allow-jit</key>
+            <true/>
+            <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+            <true/>
+            <key>com.apple.security.cs.disable-library-validation</key>
+            <true/>
+          </dict>
+          </plist>
+          EOF
+
+          STAGING="packages/app/build/macos/${EDITION}/dmg_staging"
+          APP_BUNDLE="$(find "$STAGING" -maxdepth 1 -name '*.app' | head -n 1)"
+          DMG_PATH="$(ls packages/app/dist-installer/*_v${VERSION}_macos.dmg | head -n 1)"
+          VOL_NAME="$(basename "$APP_BUNDLE" .app)"
+
+          echo "Signing nested Mach-O binaries inside $APP_BUNDLE..."
+          find "$APP_BUNDLE" -type f \( -name "*.dylib" -o -name "*.so" -o -perm -111 \) | while IFS= read -r bin; do
+            if file "$bin" | grep -q "Mach-O"; then
+              codesign --force --options runtime --timestamp --entitlements "$ENTITLEMENTS" --sign "$SIGN_IDENTITY" "$bin"
+            fi
+          done
+
+          echo "Signing app bundle $APP_BUNDLE..."
+          codesign --force --options runtime --timestamp --entitlements "$ENTITLEMENTS" --sign "$SIGN_IDENTITY" "$APP_BUNDLE"
+          codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
+
+          echo "Repacking signed DMG -> $DMG_PATH..."
+          rm -f "$DMG_PATH"
+          hdiutil create -volname "$VOL_NAME" -srcfolder "$STAGING" -ov -format UDZO "$DMG_PATH"
+          codesign --force --timestamp --sign "$SIGN_IDENTITY" "$DMG_PATH"
+
+          echo "Submitting $DMG_PATH to Apple Notary Service..."
+          xcrun notarytool submit "$DMG_PATH" \
+            --key "$ASC_KEY_PATH" \
+            --key-id "$ASC_KEY_ID" \
+            --issuer "$ASC_ISSUER_ID" \
+            --wait
+
+          echo "Stapling notarization ticket..."
+          xcrun stapler staple "$DMG_PATH"
+          xcrun stapler validate "$DMG_PATH"
+          echo "SIGNED & NOTARIZED OK: $DMG_PATH"
+
+          rm -f "$P12_PATH" "$ASC_KEY_PATH"
+          security delete-keychain "$KEYCHAIN_PATH" || true
+
       - name: Verify DMG artifact
         working-directory: app_src
         run: |
