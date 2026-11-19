@@ -1,0 +1,268 @@
+name: Build CircuitBender 1984 Plugin (macOS + Windows)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version'
+        required: true
+        type: string
+        default: '1.0.0'
+      branch:
+        description: 'Git branch of ntropey/circuitbender-1984'
+        required: true
+        type: string
+        default: 'main'
+
+jobs:
+  build-macos:
+    name: Build macOS AU/VST3/Standalone (v${{ inputs.version }})
+    runs-on: macos-latest
+    steps:
+      - name: Clone ntropey/circuitbender-1984
+        run: |
+          set -euo pipefail
+          BRANCH="${{ inputs.branch }}"
+          echo "Cloning ntropey/circuitbender-1984 (branch: $BRANCH)..."
+          git clone --depth 1 --branch "$BRANCH" "https://x-access-token:${{ secrets.GH_PAT }}@github.com/ntropey/circuitbender-1984.git" app_src
+
+      - name: Configure & Build Universal (arm64;x86_64) Release
+        run: |
+          set -euo pipefail
+          cmake -S app_src/plugin -B build-macos -G Xcode -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+          cmake --build build-macos --config Release --parallel
+
+      - name: Stage macOS Plugin Artifacts & Install Guide
+        run: |
+          set -euo pipefail
+          mkdir -p staging dist
+
+          AU_PATH="$(find build-macos -path "*_artefacts/Release/*" -name "*.component" -type d | head -n 1)"
+          if [ -z "$AU_PATH" ]; then
+            AU_PATH="$(find build-macos -path "*/Release/*" -name "*.component" -type d | head -n 1)"
+          fi
+
+          VST3_PATH="$(find build-macos -path "*_artefacts/Release/*" -name "*.vst3" -type d | head -n 1)"
+          if [ -z "$VST3_PATH" ]; then
+            VST3_PATH="$(find build-macos -path "*/Release/*" -name "*.vst3" -type d | head -n 1)"
+          fi
+
+          APP_PATH="$(find build-macos -path "*_artefacts/Release/*" -name "*.app" -type d | head -n 1)"
+          if [ -z "$APP_PATH" ]; then
+            APP_PATH="$(find build-macos -path "*/Release/*" -name "*.app" -type d | head -n 1)"
+          fi
+
+          if [ -z "$AU_PATH" ] || [ -z "$VST3_PATH" ] || [ -z "$APP_PATH" ]; then
+            echo "ERROR: Missing expected macOS plugin build artifacts!"
+            echo "AU_PATH=$AU_PATH"
+            echo "VST3_PATH=$VST3_PATH"
+            echo "APP_PATH=$APP_PATH"
+            find build-macos -maxdepth 4
+            exit 1
+          fi
+
+          cp -R "$AU_PATH" "staging/$(basename "$AU_PATH")"
+          cp -R "$VST3_PATH" "staging/$(basename "$VST3_PATH")"
+          cp -R "$APP_PATH" "staging/$(basename "$APP_PATH")"
+
+          cat <<'EOF' > staging/README_INSTALL_MACOS.txt
+          CircuitBender 1984 (macOS Universal: Apple Silicon & Intel)
+          ==========================================================
+
+          Included in this DMG:
+          - CircuitBender 1984.component  (Audio Unit / AU)
+          - CircuitBender 1984.vst3       (VST3)
+          - CircuitBender 1984.app        (Standalone)
+
+          Installation:
+          1. Audio Unit (Logic Pro, GarageBand, Ableton Live, Reaper, etc.):
+             Copy "CircuitBender 1984.component" to:
+               /Library/Audio/Plug-Ins/Components/
+
+          2. VST3 (Ableton Live, Cubase, Reaper, FL Studio, Bitwig, etc.):
+             Copy "CircuitBender 1984.vst3" to:
+               /Library/Audio/Plug-Ins/VST3/
+
+          3. Standalone App:
+             Copy "CircuitBender 1984.app" to:
+               /Applications/
+
+          After copying plugins, restart your DAW and rescan plugins if needed.
+          EOF
+
+          ls -la staging
+
+      - name: Code Sign, Pack, Notarize & Staple DMG (Developer ID)
+        env:
+          P12_B64: ${{ secrets.MACOS_DEV_ID_P12_BASE64 }}
+          P12_PASS: ${{ secrets.MACOS_DEV_ID_P12_PASSWORD }}
+          SIGN_IDENTITY: ${{ secrets.MACOS_DEV_ID_IDENTITY }}
+          ASC_KEY_ID: ${{ secrets.KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ISSUER_ID }}
+          ASC_KEY_B64: ${{ secrets.KEY_BASE64 }}
+        run: |
+          set -euo pipefail
+          VERSION="${{ inputs.version }}"
+          DMG_PATH="dist/CircuitBender1984_v${VERSION}_macos_AU_VST3.dmg"
+          VOL_NAME="CircuitBender 1984 v${VERSION}"
+
+          if [ -z "$P12_B64" ]; then
+            echo "MACOS_DEV_ID_P12_BASE64 not set; skipping Developer ID signing and creating unsigned DMG."
+            rm -f "$DMG_PATH"
+            hdiutil create -volname "$VOL_NAME" -srcfolder staging -ov -format UDZO "$DMG_PATH"
+            exit 0
+          fi
+
+          KEYCHAIN_PATH="$RUNNER_TEMP/macos-devid.keychain-db"
+          KEYCHAIN_PASS="$(openssl rand -hex 16)"
+          P12_PATH="$RUNNER_TEMP/devid.p12"
+          ASC_KEY_PATH="$RUNNER_TEMP/AuthKey_${ASC_KEY_ID}.p8"
+
+          echo "$P12_B64" | base64 --decode > "$P12_PATH"
+          echo "$ASC_KEY_B64" | base64 --decode > "$ASC_KEY_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN_PATH"
+          security import "$P12_PATH" -P "$P12_PASS" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASS" "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | sed -e 's/^[[:space:]]*//' -e 's/"//g')
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+
+          for bundle in staging/*.component staging/*.vst3 staging/*.app; do
+            echo "Signing $bundle..."
+            codesign --force --deep --options runtime --timestamp --sign "$SIGN_IDENTITY" "$bundle"
+            codesign --verify --deep --strict --verbose=2 "$bundle"
+          done
+
+          echo "Packing signed DMG -> $DMG_PATH..."
+          rm -f "$DMG_PATH"
+          hdiutil create -volname "$VOL_NAME" -srcfolder staging -ov -format UDZO "$DMG_PATH"
+          codesign --force --timestamp --sign "$SIGN_IDENTITY" "$DMG_PATH"
+
+          echo "Submitting $DMG_PATH to Apple Notary Service..."
+          xcrun notarytool submit "$DMG_PATH" \
+            --key "$ASC_KEY_PATH" \
+            --key-id "$ASC_KEY_ID" \
+            --issuer "$ASC_ISSUER_ID" \
+            --wait
+
+          echo "Stapling notarization ticket..."
+          xcrun stapler staple "$DMG_PATH"
+          xcrun stapler validate "$DMG_PATH"
+          echo "SIGNED & NOTARIZED OK: $DMG_PATH"
+
+          rm -f "$P12_PATH" "$ASC_KEY_PATH"
+          security delete-keychain "$KEYCHAIN_PATH" || true
+
+      - name: Verify macOS DMG artifact
+        run: |
+          set -euo pipefail
+          DMG_PATH="dist/CircuitBender1984_v${{ inputs.version }}_macos_AU_VST3.dmg"
+          if [ ! -f "$DMG_PATH" ]; then
+            echo "ERROR: Expected DMG not found at $DMG_PATH"
+            exit 1
+          fi
+          SIZE=$(stat -f%z "$DMG_PATH")
+          echo "Found DMG: $DMG_PATH ($SIZE bytes)"
+          if [ "$SIZE" -le 1048576 ]; then
+            echo "ERROR: DMG $DMG_PATH is unexpectedly small ($SIZE bytes <= 1 MB)"
+            exit 1
+          fi
+
+      - name: Upload macOS AU/VST3/Standalone DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CircuitBender1984-v${{ inputs.version }}-macos-AU-VST3
+          path: dist/CircuitBender1984_v${{ inputs.version }}_macos_AU_VST3.dmg
+          retention-days: 30
+          if-no-files-found: error
+
+  build-windows:
+    name: Build Windows x64 VST3/Standalone (v${{ inputs.version }})
+    runs-on: windows-latest
+    steps:
+      - name: Clone ntropey/circuitbender-1984
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $branch = "${{ inputs.branch }}"
+          Write-Host "Cloning ntropey/circuitbender-1984 (branch: $branch)..."
+          git clone --depth 1 --branch $branch "https://x-access-token:${{ secrets.GH_PAT }}@github.com/ntropey/circuitbender-1984.git" app_src
+
+      - name: Configure & Build x64 Release
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          cmake -S app_src/plugin -B build-win -A x64
+          cmake --build build-win --config Release --parallel
+
+      - name: Stage & Zip Windows Plugin Artifacts
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path staging, dist | Out-Null
+
+          $vst3 = Get-ChildItem -Path build-win -Recurse -Directory -Filter "*.vst3" |
+            Where-Object { $_.FullName -match "_artefacts[\\/]Release[\\/]" } |
+            Select-Object -First 1
+          if (-not $vst3) {
+            $vst3 = Get-ChildItem -Path build-win -Recurse -Directory -Filter "*.vst3" |
+              Where-Object { $_.FullName -match "[\\/]Release[\\/]" } |
+              Select-Object -First 1
+          }
+
+          $exe = Get-ChildItem -Path build-win -Recurse -File -Filter "*.exe" |
+            Where-Object { $_.FullName -match "_artefacts[\\/]Release[\\/]Standalone[\\/]" } |
+            Select-Object -First 1
+          if (-not $exe) {
+            $exe = Get-ChildItem -Path build-win -Recurse -File -Filter "*CircuitBender*.exe" |
+              Where-Object { $_.FullName -match "[\\/]Release[\\/]" } |
+              Select-Object -First 1
+          }
+
+          if (-not $vst3 -or -not $exe) {
+            Write-Error "Missing expected Windows plugin build artifacts! VST3=$($vst3.FullName) EXE=$($exe.FullName)"
+            exit 1
+          }
+
+          Copy-Item -Path $vst3.FullName -Destination (Join-Path "staging" $vst3.Name) -Recurse -Force
+          Copy-Item -Path $exe.FullName -Destination (Join-Path "staging" $exe.Name) -Force
+
+          @"
+          CircuitBender 1984 (Windows x64)
+          ================================
+
+          Included in this ZIP:
+          - CircuitBender 1984.vst3  (VST3 plugin bundle folder)
+          - CircuitBender 1984.exe   (Standalone application)
+
+          Installation:
+          1. VST3 Plugin (Ableton Live, FL Studio, Reaper, Cubase, Bitwig, Studio One, etc.):
+             Copy the entire "CircuitBender 1984.vst3" folder to:
+               C:\Program Files\Common Files\VST3\
+
+          2. Standalone App:
+             Run "CircuitBender 1984.exe" directly from any folder.
+
+          After copying the VST3 bundle, restart your DAW and rescan plugins if needed.
+          "@ | Set-Content -Path "staging/README_INSTALL_WINDOWS.txt" -Encoding UTF8
+
+          $zipPath = "dist/CircuitBender1984_v${{ inputs.version }}_win64_VST3.zip"
+          if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
+          Compress-Archive -Path "staging\*" -DestinationPath $zipPath -CompressionLevel Optimal
+
+          $zipItem = Get-Item $zipPath
+          Write-Host "Created ZIP: $($zipItem.FullName) ($($zipItem.Length) bytes)"
+          if ($zipItem.Length -le 1048576) {
+            Write-Error "ZIP $zipPath is unexpectedly small ($($zipItem.Length) bytes <= 1 MB)"
+            exit 1
+          }
+
+      - name: Upload Windows x64 VST3/Standalone ZIP artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CircuitBender1984-v${{ inputs.version }}-win64-VST3
+          path: dist/CircuitBender1984_v${{ inputs.version }}_win64_VST3.zip
+          retention-days: 30
+          if-no-files-found: error
