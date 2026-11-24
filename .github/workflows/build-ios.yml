@@ -26,6 +26,10 @@ on:
         description: 'Override iOS Build Number (optional)'
         required: false
         default: ''
+      marketing_version:
+        description: 'Override iOS Marketing Version (optional)'
+        required: false
+        default: ''
   workflow_call:
     inputs:
       target_app:
@@ -39,6 +43,11 @@ on:
         default: 'main'
       build_number:
         description: 'Override iOS Build Number'
+        required: false
+        type: string
+        default: ''
+      marketing_version:
+        description: 'Override iOS Marketing Version'
         required: false
         type: string
         default: ''
@@ -169,6 +178,11 @@ jobs:
           cd app_src
           BUILD_TYPE="${{ steps.config.outputs.build_type }}"
           BUILD_NUMBER="${{ inputs.build_number }}"
+          MARKETING_VERSION="${{ inputs.marketing_version }}"
+          PBXPROJ="${{ steps.config.outputs.workspace_path }}/project.pbxproj"
+          if [ -n "$MARKETING_VERSION" ] && [ -f "$PBXPROJ" ]; then
+            sed -i '' "s/MARKETING_VERSION = [^;]*;/MARKETING_VERSION = ${MARKETING_VERSION};/g" "$PBXPROJ"
+          fi
 
           case "$BUILD_TYPE" in
             "pnpm-logisim-pro")
