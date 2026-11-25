@@ -195,9 +195,9 @@ jobs:
               ;;
             "pnpm-logisim-lite")
               BUILD_NUM="${BUILD_NUMBER:-3}"
-              sed -i '' 's/Logisim Revisited/Logisim Lab/g' packages/app/capacitor.config.ts
+              sed -i '' 's/Logisim Revisited/LogicSim/g' packages/app/capacitor.config.ts
               sed -i '' "s/CURRENT_PROJECT_VERSION = [0-9]*;/CURRENT_PROJECT_VERSION = ${BUILD_NUM};/g" packages/app/ios/App/App.xcodeproj/project.pbxproj
-              /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName Logisim Lab" packages/app/ios/App/App/Info.plist || true
+              /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName LogicSim" packages/app/ios/App/App/Info.plist || true
 
               ICON_SRC="packages/app/store-assets/icons/lite/ios/AppIcon-1024x1024.png"
               ICON_DIR="packages/app/ios/App/App/Assets.xcassets/AppIcon.appiconset"
