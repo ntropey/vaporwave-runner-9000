@@ -98,9 +98,9 @@ jobs:
               ;;
             "logisim-lite")
               REPO="ntropey/logisim_revisited"
-              BUNDLE_ID="com.revisitedlabs.logisimlite"
+              BUNDLE_ID="com.revisitedlabs.logisim"
               WORKSPACE_PATH="packages/app/ios/App/App.xcodeproj"
-              PROV_SECRET="${{ secrets.PROV_LOGISIM_LITE }}"
+              PROV_SECRET="${{ secrets.PROV_LOGISIM }}"
               BUILD_TYPE="pnpm-logisim-lite"
               ;;
             "hodoku_revisited")
@@ -190,16 +190,14 @@ jobs:
                 sed -i '' "s/CURRENT_PROJECT_VERSION = [0-9]*;/CURRENT_PROJECT_VERSION = ${BUILD_NUMBER};/g" packages/app/ios/App/App.xcodeproj/project.pbxproj
               fi
               pnpm install
-              VITE_EDITION=pro pnpm --filter @logisim/app build
+              pnpm --filter @logisim/app build
               cd packages/app && npx cap sync ios
               ;;
             "pnpm-logisim-lite")
               BUILD_NUM="${BUILD_NUMBER:-3}"
-              sed -i '' 's/com\.revisitedlabs\.logisim/com.revisitedlabs.logisimlite/g' packages/app/capacitor.config.ts
-              sed -i '' 's/Logisim Revisited/Logisim Lab Lite/g' packages/app/capacitor.config.ts
-              sed -i '' 's/com\.revisitedlabs\.logisim/com.revisitedlabs.logisimlite/g' packages/app/ios/App/App.xcodeproj/project.pbxproj
+              sed -i '' 's/Logisim Revisited/Logisim Lab/g' packages/app/capacitor.config.ts
               sed -i '' "s/CURRENT_PROJECT_VERSION = [0-9]*;/CURRENT_PROJECT_VERSION = ${BUILD_NUM};/g" packages/app/ios/App/App.xcodeproj/project.pbxproj
-              /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName Logisim Lab Lite" packages/app/ios/App/App/Info.plist || true
+              /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName Logisim Lab" packages/app/ios/App/App/Info.plist || true
 
               ICON_SRC="packages/app/store-assets/icons/lite/ios/AppIcon-1024x1024.png"
               ICON_DIR="packages/app/ios/App/App/Assets.xcassets/AppIcon.appiconset"
